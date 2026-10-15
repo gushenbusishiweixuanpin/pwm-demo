@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<!--
+  更早的简单版：直流斩波、SPWM 比较、H 桥电压、RL 电流。没有死区和频谱。
+  当前完整版是仓库根目录的 index.html。本文件不依赖外部库，双击即可打开。
+-->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IGBT PWM / SPWM 交互演示</title>
+<style>
+body{margin:0;font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f6f9;color:#222}
+header{background:#3dcd58;color:#fff;padding:14px 20px}h1{margin:0;font-size:20px}
+main{max-width:1100px;margin:auto;padding:12px}
+.card{background:#fff;border-radius:10px;box-shadow:0 1px 4px #0002;padding:14px;margin:12px 0}
+h2{font-size:16px;margin:0 0 6px}p.ex{color:#555;font-size:14px;margin:6px 0;line-height:1.6}
+canvas{width:100%;height:220px;display:block;background:#fcfcfd;border:1px solid #e3e6ea;border-radius:6px}
+.ctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+label{font-size:14px}input[type=range]{width:100%}b{color:#0a7d2c}
+.legend span{display:inline-block;margin-right:14px;font-size:13px}.legend i{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:4px}
+</style></head><body>
+<header><h1>IGBT 脉宽调制（PWM / SPWM）交互演示</h1></header>
+<main>
+<div class="card"><h2>1. 直流斩波：开关把直流"切"成脉冲</h2>
+<label>占空比 D = <b id="dv"></b></label><input id="duty" type="range" min="0" max="1" step="0.01" value="0.4">
+<canvas id="c1"></canvas>
+<p class="ex">IGBT 只有"全通"和"全断"两种状态，输出要么是 Vdc，要么是 0。占空比 D 越大，脉冲越宽，平均电压（虚线）= D × Vdc —— 这就是"用开关控制平均电压"的核心思想。</p></div>
+
+<div class="card"><h2>控制参数（影响下方 2、3 图）</h2><div class="ctl">
+<label>输出频率 f = <b id="fv"></b> Hz<input id="f" type="range" min="5" max="60" step="1" value="50"></label>
+<label>调制比 m = <b id="mv"></b><input id="m" type="range" min="0" max="1" step="0.01" value="0.8"></label>
+<label>载波频率 fc = <b id="cv"></b> kHz<input id="fc" type="range" min="0.5" max="10" step="0.1" value="1.5"></label>
+<label>负载电感 L = <b id="lv"></b> mH（R=10Ω）<input id="L" type="range" min="2" max="100" step="1" value="8"></label>
+</div><p class="ex">图中始终显示约 2 个输出基波周期；Vdc 取 1（标幺值）。</p></div>
+
+<div class="card"><h2>2. SPWM：正弦参考波 vs 三角载波</h2>
+<div class="legend"><span><i style="background:#1f6feb"></i>正弦参考 +m·sin</span><span><i style="background:#8aa4c8"></i>反相参考 −m·sin</span><span><i style="background:#e8912d"></i>三角载波</span></div>
+<canvas id="c2"></canvas>
+<p class="ex">控制器把正弦"目标"与高频三角波比较：正弦高于三角波时开关导通。正弦值大的地方脉冲宽、值小的地方脉冲窄，于是脉宽按正弦规律变化。</p>
+<h2 style="margin-top:12px">H 桥（单极性）输出电压</h2><canvas id="c3"></canvas>
+<p class="ex">两个桥臂分别与 +sin、−sin 比较，相减后得到 +Vdc / 0 / −Vdc 三电平。改变 f 就改变了输出正弦的频率，改变 m 就改变了输出电压幅值——变频器的本质就是这样。</p></div>
+
+<div class="card"><h2>3. RL 负载电流：近似正弦</h2>
+<div class="legend"><span><i style="background:#d6336c"></i>实际电流 i(t)</span><span><i style="background:#2b8a3e"></i>基波（理想正弦）电流</span></div>
+<canvas id="c4"></canvas>
+<p class="ex">电机绕组像电感，电流不能突变，会把电压脉冲"平滑"掉，电流 i 几乎是正弦，只带小锯齿（纹波）。载波频率越高或 L 越大，纹波越小、电流越光滑；但载波越高 IGBT 开关损耗越大，中压变频器通常载波只有几百 Hz 到 1 kHz 左右，靠多电平拓扑弥补。</p>
+<p class="ex" id="ripple"></p></div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+function prep(c){const r=c.getBoundingClientRect(),d=window.devicePixelRatio||1;c.width=r.width*d;c.height=r.height*d;const g=c.getContext('2d');g.setTransform(d,0,0,d,0,0);return{g,w:r.width,h:r.height};}
+function axes(o,ymin,ymax,T,unit){const{g,w,h}=o;g.clearRect(0,0,w,h);g.strokeStyle='#eee';g.fillStyle='#888';g.font='11px sans-serif';
+ const Y=v=>10+(h-30)*(ymax-v)/(ymax-ymin);for(let k=0;k<=4;k++){const v=ymin+(ymax-ymin)*k/4;g.beginPath();g.moveTo(40,Y(v));g.lineTo(w-5,Y(v));g.stroke();g.fillText(v.toFixed(2),2,Y(v)+4);}
+ g.strokeStyle='#999';g.beginPath();g.moveTo(40,Y(0));g.lineTo(w-5,Y(0));g.stroke();g.fillText('t: 0 ~ '+(T*1000).toFixed(1)+' ms',w-110,h-4);
+ return{X:t=>40+(w-45)*t/T,Y};}
+function line(g,pts,col,lw,dash){g.strokeStyle=col;g.lineWidth=lw||1.5;g.setLineDash(dash||[]);g.beginPath();pts.forEach((p,i)=>i?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1]));g.stroke();g.setLineDash([]);g.lineWidth=1;}
+const tri=(t,fc)=>{const x=(t*fc)%1;return x<0.5?4*x-1:3-4*x;};
+function draw(){
+ const D=+$('duty').value;$('dv').textContent=D.toFixed(2);
+ let o=prep($('c1')),T=5e-3,a=axes(o,-0.1,1.2,T),p=[];
+ for(let k=0;k<=2000;k++){const t=T*k/2000;p.push([a.X(t),a.Y(((t*1000)%1)<D?1:0)]);}
+ line(o.g,p,'#1f6feb',2);line(o.g,[[a.X(0),a.Y(D)],[a.X(T),a.Y(D)]],'#d6336c',2,[6,4]);o.g.fillStyle='#d6336c';o.g.fillText('平均值 = '+D.toFixed(2)+'·Vdc',50,a.Y(D)-5);
+ const f=+$('f').value,m=+$('m').value,fc=+$('fc').value*1000,L=+$('L').value/1000,R=10;
+ $('fv').textContent=f;$('mv').textContent=m.toFixed(2);$('cv').textContent=(fc/1000).toFixed(1);$('lv').textContent=L*1000;
+ T=2/f;const N=Math.min(200000,Math.max(4000,Math.ceil(T*fc*80)));const dt=T/N;
+ const P2=[[],[],[]],P3=[],P4=[],P5=[];const o2=prep($('c2')),a2=axes(o2,-1.1,1.1,T);const o3=prep($('c3')),a3=axes(o3,-1.2,1.2,T);
+ // pre-run one period for steady state
+ const w=2*Math.PI*f,Z=Math.hypot(R,w*L),ph=Math.atan2(w*L,R);let i=-m/Z*Math.sin(ph);
+ const vs=[],is=[];
+ for(let k=0;k<=N;k++){const t=k*dt,s=m*Math.sin(w*t),c=tri(t,fc),v=(s>c?1:0)-(-s>c?1:0);vs.push(v);is.push(i);i+=dt*(v-R*i)/L;}
+ const step=Math.max(1,Math.floor(N/3000));let imax=0,rip=0;
+ for(let k=0;k<=N;k++){const t=k*dt,ideal=m/Z*Math.sin(w*t-ph);imax=Math.max(imax,Math.abs(is[k]),Math.abs(ideal));if(k>N/2)rip=Math.max(rip,Math.abs(is[k]-ideal));
+  if(k%step==0||k==N){const s=m*Math.sin(w*t);P2[0].push([a2.X(t),a2.Y(s)]);P2[1].push([a2.X(t),a2.Y(-s)]);P2[2].push([a2.X(t),a2.Y(tri(t,fc))]);P3.push([a3.X(t),a3.Y(vs[k])]);P4.push([t,is[k]]);P5.push([t,ideal]);}}
+ line(o2.g,P2[2],'#e8912d',1);line(o2.g,P2[1],'#8aa4c8',1.5);line(o2.g,P2[0],'#1f6feb',2);
+ line(o3.g,P3,'#1f6feb',1.2);const fv=[];for(let k=0;k<=400;k++){const t=T*k/400;fv.push([a3.X(t),a3.Y(m*Math.sin(w*t))]);}line(o3.g,fv,'#d6336c',2,[6,4]);
+ o3.g.fillStyle='#d6336c';o3.g.fillText('虚线：基波电压 m·Vdc·sin(ωt)',50,22);
+ const lim=Math.max(imax*1.15,1e-3),o4=prep($('c4')),a4=axes(o4,-lim,lim,T);
+ line(o4.g,P4.map(q=>[a4.X(q[0]),a4.Y(q[1])]),'#d6336c',1.3);line(o4.g,P5.map(q=>[a4.X(q[0]),a4.Y(q[1])]),'#2b8a3e',2,[6,4]);
+ $('ripple').innerHTML='当前：载波比 fc/f = <b>'+(fc/f).toFixed(0)+'</b>，基波电流幅值 ≈ <b>'+(m/Z).toFixed(4)+'</b>，最大纹波偏差 ≈ <b>'+rip.toFixed(4)+'</b>（'+(Z&&m?(rip/(m/Z)*100).toFixed(1):'—')+'%）。电流单位：Vdc/Ω（标幺）。';
+}
+document.querySelectorAll('input').forEach(e=>e.addEventListener('input',draw));window.addEventListener('resize',draw);draw();
+</script></body></html>
