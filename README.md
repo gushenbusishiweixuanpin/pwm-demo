@@ -21,18 +21,13 @@
 2. 双击解压出来的 `index.html`（旧版则双击 `v1/spwm_demo.html`）。
 3. 用 Chrome、Edge 或 Firefox 打开即可。计算全在你自己的浏览器里完成，不需要安装软件，也不需要联网。
 
-### 放到 GitHub Pages 上
+### 用 GitHub Pages 打开
 
-合并到 `main` 之后：
+推到 `main` 之后，[`.github/workflows/pages.yml`](.github/workflows/pages.yml) 会把仓库根目录发布出去。页面地址：
 
-1. 打开仓库的 **Settings → Pages**。
-2. **Build and deployment** 里，Source 选 **Deploy from a branch**。
-3. Branch 选 **main**，文件夹选 **/ (root)**，保存。
-4. 等一两分钟。页面地址一般是：
+<https://gushenbusishiweixuanpin.github.io/pwm-demo/>
 
-   <https://gushenbusishiweixuanpin.github.io/pwm-demo/>
-
-旧版地址是同一网址后面加上 `v1/spwm_demo.html`。
+旧版地址是同一网址后面加上 `v1/spwm_demo.html`。第一次发布要等 Actions 里的 “Deploy static content to Pages” 跑完。
 
 地址栏还可以带参数，方便把某一张图单独摆出来，例如 `index.html?f=30&m=1.2&solo=4`。`solo` 取 1 到 4，只显示对应的那一张卡片。平时双击打开不用管这个。
 
