@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<!--
+  整个演示就是这一个文件，浏览器直接打开，不需要安装任何东西，也不引用外部库。
+  从上到下分成三块：
+    1. <style>  外观：颜色、间距、卡片、画布高度
+    2. <body>   页面上有什么：四张卡片，每张里有说明、滑块和画布
+    3. <script> 计算和绘图：读滑块的数，算出波形，画到对应的画布上
+  滑块和画布都靠 id 对上号，例如 id="ton" 的滑块、id="c1" 的画布。
+-->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IGBT PWM 进阶演示 v2</title>
+<style>
+/* 页面底色、正文字体 */
+body{margin:0;font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f6f9;color:#222}
+/* 绿色顶栏 */
+header{background:#3dcd58;color:#fff;padding:14px 20px}h1{margin:0;font-size:20px}
+/* 内容居中，白色圆角卡片 */
+main{max-width:1100px;margin:auto;padding:12px}
+.card{background:#fff;border-radius:10px;box-shadow:0 1px 4px #0002;padding:14px;margin:14px 0}
+h2{font-size:17px;margin:0 0 8px}h3{font-size:14px;margin:10px 0 4px;color:#444}
+p.ex{color:#555;font-size:14px;margin:6px 0;line-height:1.6}
+/* 画布铺满卡片宽度。class="s" 的是较矮的门极 / 电压波形 */
+canvas{width:100%;height:200px;display:block;background:#fcfcfd;border:1px solid #e3e6ea;border-radius:6px}
+canvas.s{height:90px}
+/* 滑块自动排成几列 */
+.ctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:8px}
+label{font-size:14px}input[type=range]{width:100%}b{color:#0a7d2c}
+/* 读数条、直通警告（默认藏着）、过调制提示（默认藏着）、图例色块 */
+.read{font-size:15px;background:#eef8f0;padding:8px 12px;border-radius:6px;margin:6px 0}
+.warn{background:#fdecec;color:#b00020;padding:8px 12px;border-radius:6px;font-size:14px;margin:6px 0;display:none}
+.note{background:#fff6e0;color:#8a5a00;padding:8px 12px;border-radius:6px;font-size:14px;margin:6px 0;display:none}
+.lg span{display:inline-block;margin-right:14px;font-size:13px}.lg i{display:inline-block;width:14px;height:4px;vertical-align:middle;margin-right:4px}
+</style></head><body>
+<header><h1>IGBT 脉宽调制进阶演示（Vdc = 500 V）</h1></header>
+<main>
+<!-- 第 1 张图：滑块 ton，画布 c1。计算在脚本函数 m1 -->
+<section class="card"><h2>1. 占空比演示</h2>
+<label>导通时间 Ton = <b id="tonv"></b> μs（周期 T = 200 μs）<input id="ton" type="range" min="0" max="200" step="1" value="100"></label>
+<div class="read" id="r1"></div><canvas id="c1"></canvas>
+<p class="ex">IGBT 在每个 200 μs 周期里导通 Ton，其余时间关断。平均电压 = 占空比 × 500 V，例如 20% → 100 V、50% → 250 V、80% → 400 V。</p><p class="ex">为什么要这样做？因为 IGBT 工作在"全开"或"全关"时损耗最小：全开时电压降很小，全关时几乎没有电流，两种状态下发热都很少。如果让它半开半关当成可变电阻来调压，大部分功率会变成热量。所以变频器不"调电压大小"，而是"调导通时间"，再靠负载电感把脉冲平均掉——这就是 PWM（脉宽调制）。</p><p class="ex">试一试：把 Ton 拖到 40 μs、100 μs、160 μs，观察平均电压分别是 100 V、250 V、400 V，与占空比成正比。</p></section>
+
+<!-- 第 2 张图：滑块 f、fc、m，画布 c2 / c2u / c2l / c2o。计算在 m2 -->
+<section class="card"><h2>2. SPWM 比较与上下管驱动</h2><div class="ctl">
+<label>输出频率 f = <b id="fv"></b> Hz<input id="f" type="range" min="5" max="60" step="1" value="50"></label>
+<label>载波频率 fc = <b id="fcv"></b> kHz<input id="fc" type="range" min="0.5" max="10" step="0.1" value="1.5"></label>
+<label>调制比 m = <b id="mv"></b><input id="m" type="range" min="0" max="1.5" step="0.01" value="0.8"></label></div>
+<div class="note" id="om">⚠ 过调制（m &gt; 1）：正弦波峰超过三角波，波峰附近不再有开关动作（一直导通），输出变得"平顶"，会出现 3、5、7 次等低次谐波（见第 4 部分频谱）。</div>
+<div class="lg"><span><i style="background:#1f6feb"></i>正弦调制波</span><span><i style="background:#e8912d"></i>三角载波</span><span><i style="background:#3dcd5855;height:10px"></i>正弦 &gt; 三角（上管导通）</span></div>
+<canvas id="c2"></canvas>
+<h3>上管 IGBT 门极信号</h3><canvas id="c2u" class="s"></canvas>
+<h3>下管 IGBT 门极信号（与上管互补）</h3><canvas id="c2l" class="s"></canvas>
+<h3>桥臂输出电压（相对直流中点，±250 V）</h3><canvas id="c2o" class="s"></canvas>
+<p class="ex">正弦高于三角波时上管开、下管关，输出 +250 V；反之输出 −250 V。正弦越大，"上管导通"的绿色区段越宽，于是平均电压跟着正弦变化。</p><p class="ex">SPWM（正弦脉宽调制）就是把第 1 部分的"占空比"做成随时间按正弦变化：每个载波周期里，占空比由该时刻正弦值的大小决定。这样每一小段的平均电压连起来就是一条正弦波。调节输出频率 f 就能改变正弦的快慢，从而改变电机转速；调制比 m 决定正弦幅值，也就是输出电压的大小（变频器通常让电压与频率成比例，即 V/f 控制）。</p><p class="ex">上管和下管的门极信号永远相反（互补）：同一桥臂的两个 IGBT 绝不能同时导通，否则直流母线会被短路（见第 3 部分）。载波频率 fc 越高，一个基波周期里的脉冲越多，输出越接近正弦，但开关次数越多，IGBT 发热越大。</p></section>
+
+<!-- 第 3 张图：滑块 td、toff，画布 c3。计算在 m3。载波频率沿用第 2 部分的 fc -->
+<section class="card"><h2>3. 死区演示（一次换流的放大图）</h2><div class="ctl">
+<label>死区时间 td = <b id="tdv"></b> μs<input id="td" type="range" min="0" max="5" step="0.1" value="3"></label>
+<label>IGBT 关断时间 toff = <b id="toffv"></b> μs<input id="toff" type="range" min="0.5" max="4" step="0.1" value="2"></label></div>
+<div class="warn" id="st"></div>
+<div class="lg"><span><i style="background:#1f6feb"></i>上管实际导通</span><span><i style="background:#9c36b5"></i>下管实际导通</span><span><i style="background:#f005;height:10px"></i>直通（短路）窗口</span></div>
+<canvas id="c3" style="height:240px"></canvas>
+<div class="read" id="r3"></div>
+<p class="ex">IGBT 关断要拖一段"尾巴"(toff)，所以下管必须等上管彻底关断后再开，中间这段两管都不开的时间就是死区。死区小于关断时间时，上下管会同时导通，直流母线直接短路，电流瞬间飙升，可能炸管。</p>
+<p class="ex">死区期间输出电压由电流方向决定（续流二极管导通）：电流流出桥臂时输出被拉低，流入时被抬高，所以每个开关周期损失约 td 的伏秒，平均电压误差 ΔV ≈ Vdc·td·fc，方向与电流方向相反。</p><p class="ex">工程上的取舍：死区要留足（大于关断时间加上驱动延时等余量）来保证安全，但死区越大，电压误差越大，低速、小电压时电流波形畸变越明显。因此变频器软件里一般有"死区补偿"，根据电流方向把损失的伏秒补回来。试一试：把 td 拖到 2 μs 以下，观察红色直通窗口和警告。</p></section>
+
+<!-- 第 4 张图：没有单独的滑块，用第 2 部分的 f、fc、m。频谱画在 c4，电流画在 c5。计算都在 m4 -->
+<section class="card"><h2>4. 谐波频谱与负载电流</h2>
+<p class="ex" style="margin-top:0">频谱和电流使用第 2 部分的 f、fc、m 参数。</p>
+<canvas id="c4" style="height:230px"></canvas>
+<div class="read" id="r4"></div>
+<p class="ex">输出电压除了想要的基波（绿色），能量主要集中在载波频率及其倍数附近的"边带"（橙色）。这些高频谐波离基波很远，容易被电感滤掉；过调制时会在基波附近冒出低次谐波（红色），就难滤了。</p><p class="ex">频谱就是把输出电压拆成一系列不同频率的正弦分量。SPWM 的好处是把"不想要的谐波"推到高频（载波频率附近），而不是留在 5、7 次这些低频位置；电机电感对高频阻抗大（XL = 2πfL），所以高频谐波产生的电流很小。试一试：把 m 拉到 1.2 以上，观察红色低次谐波出现；把 fc 调高，观察橙色边带向右移动。</p>
+<h3>RL 负载电流（R = 10 Ω，L = 20 mH）</h3>
+<div class="lg"><span><i style="background:#d6336c"></i>实际电流</span><span><i style="background:#2b8a3e"></i>理想正弦电流</span></div>
+<canvas id="c5"></canvas>
+<p class="ex">电机绕组像电感，电流不能突变，会把一串方波脉冲"抹平"成近似正弦的电流，只剩小锯齿纹波；载波频率越高，纹波越小。</p><p class="ex">绿色虚线是只有基波电压时的理想电流，红色是实际脉冲电压产生的电流，两者基本重合，说明电机"感受到"的就是正弦电压。纹波大小约与 Vdc /(L·fc) 成正比：降低载波频率时纹波明显变大，这会带来额外的发热和噪声。中压变频器开关频率较低，常用多电平拓扑来减小谐波。</p></section>
+</main>
+<script>
+// ----- 小工具：找元素、准备画布、画坐标和折线 -----
+
+// $('c1') 等价于 document.getElementById('c1')。前面的 + 把滑块读出来的文字转成数字。
+const $=id=>document.getElementById(id),VDC=500;
+
+// 按屏幕清晰度把画布的内部像素设好，并返回绘图上下文 g 和可见宽高 w、h。
+function prep(c){const r=c.getBoundingClientRect(),d=window.devicePixelRatio||1;c.width=r.width*d;c.height=r.height*d;const g=c.getContext('2d');g.setTransform(d,0,0,d,0,0);return{g,w:r.width,h:r.height};}
+
+// 画横网格和轴标签。X(物理量)、Y(物理量) 把工程单位换成像素坐标。
+function axes(o,x0,x1,y0,y1,xl,ticks){const{g,w,h}=o,L=46,B=18;g.clearRect(0,0,w,h);g.font='11px sans-serif';
+ const X=x=>L+(w-L-6)*(x-x0)/(x1-x0),Y=y=>6+(h-B-6)*(y1-y)/(y1-y0);
+ (ticks||[y0,(y0+y1)/2,y1]).forEach(v=>{g.strokeStyle='#eee';g.beginPath();g.moveTo(L,Y(v));g.lineTo(w-6,Y(v));g.stroke();g.fillStyle='#888';g.fillText(+v.toFixed(2)+'',2,Y(v)+4);});
+ g.fillStyle='#888';g.fillText(xl,w-g.measureText(xl).width-8,h-4);return{X,Y,g};}
+
+// 把 [[x像素, y像素], ...] 连成一条线。d 是虚线样式，例如 [6,4]。
+function line(g,p,c,lw,d){g.strokeStyle=c;g.lineWidth=lw||1.5;g.setLineDash(d||[]);g.beginPath();p.forEach((q,i)=>i?g.lineTo(q[0],q[1]):g.moveTo(q[0],q[1]));g.stroke();g.setLineDash([]);g.lineWidth=1;}
+
+// 三角载波：在 -1 和 +1 之间来回，频率是 fc（单位 Hz）。
+const tri=(t,fc)=>{const x=(t*fc)%1;return x<0.5?4*x-1:3-4*x;};
+
+// 基-2 FFT，原地计算，不除以 N。re、im 是实部和虚部，长度必须是 2 的幂。第 4 部分用它拆频谱。
+function fft(re,im){const n=re.length;for(let i=1,j=0;i<n;i++){let b=n>>1;for(;j&b;b>>=1)j^=b;j^=b;if(i<j){[re[i],re[j]]=[re[j],re[i]];[im[i],im[j]]=[im[j],im[i]];}}
+ for(let len=2;len<=n;len<<=1){const a=-2*Math.PI/len,wr=Math.cos(a),wi=Math.sin(a);for(let i=0;i<n;i+=len){let cr=1,ci=0;for(let k=0;k<len/2;k++){const p=i+k,q=p+len/2,tr=re[q]*cr-im[q]*ci,ti=re[q]*ci+im[q]*cr;re[q]=re[p]-tr;im[q]=im[p]-ti;re[p]+=tr;im[p]+=ti;const nr=cr*wr-ci*wi;ci=cr*wi+ci*wr;cr=nr;}}}}
+
+// ----- 第 1 张图：占空比。周期 200 μs，导通 Ton，平均电压 = (Ton/200) × 500 V -----
+function m1(){const ton=+$('ton').value,D=ton/200;$('tonv').textContent=ton;
+ $('r1').innerHTML='占空比 D = <b>'+(D*100).toFixed(0)+'%</b>　平均电压 = '+(D*100).toFixed(0)+'% × 500 V = <b>'+(D*VDC).toFixed(0)+' V</b>';
+ const a=axes(prep($('c1')),0,1000,-30,560,'时间 μs（0~1000，共 5 个周期）',[0,250,500]),p=[];
+ for(let k=0;k<=3000;k++){const t=k/3;p.push([a.X(t),a.Y((t%200)<ton||ton==200?VDC:0)]);}
+ line(a.g,p,'#1f6feb',2);line(a.g,[[a.X(0),a.Y(D*VDC)],[a.X(1000),a.Y(D*VDC)]],'#d6336c',2,[6,4]);a.g.fillStyle='#d6336c';a.g.fillText('平均 '+(D*VDC).toFixed(0)+' V',52,a.Y(D*VDC)-5);}
+
+// 读第 2 部分的三个滑块。fc 滑块单位是 kHz，这里乘 1000 变成 Hz。
+function P(){return{f:+$('f').value,fc:+$('fc').value*1000,m:+$('m').value};}
+
+// ----- 第 2 张图：正弦和三角载波比较，得到上下管门极和桥臂电压 ±250 V -----
+function m2(){const{f,fc,m}=P();$('fv').textContent=f;$('fcv').textContent=(fc/1000).toFixed(1);$('mv').textContent=m.toFixed(2);
+ $('om').style.display=m>1?'block':'none';
+ const T=2/f,N=6000,o=prep($('c2')),a=axes(o,0,T,-1.6,1.6,'时间 0~'+(T*1000).toFixed(0)+' ms（2 个基波周期）',[-1.5,-1,0,1,1.5]);
+ const au=axes(prep($('c2u')),0,T,-0.2,1.3,'',[0,1]),al=axes(prep($('c2l')),0,T,-0.2,1.3,'',[0,1]),ao=axes(prep($('c2o')),0,T,-320,320,'',[-250,0,250]);
+ const s=[],c=[],u=[],l=[],v=[];a.g.fillStyle='#3dcd5840';
+ for(let k=0;k<=N;k++){const t=T*k/N,sv=m*Math.sin(2*Math.PI*f*t),cv=tri(t,fc),on=sv>cv;
+  if(on)a.g.fillRect(a.X(t),a.Y(1.6),a.X(T/N)-a.X(0)+0.6,a.Y(-1.6)-a.Y(1.6));
+  s.push([a.X(t),a.Y(sv)]);c.push([a.X(t),a.Y(cv)]);u.push([au.X(t),au.Y(on?1:0)]);l.push([al.X(t),al.Y(on?0:1)]);v.push([ao.X(t),ao.Y(on?250:-250)]);}
+ line(a.g,c,'#e8912d',1);line(a.g,s,'#1f6feb',2);line(au.g,u,'#1f6feb',1.2);line(al.g,l,'#9c36b5',1.2);line(ao.g,v,'#333',1.2);}
+
+// ----- 第 3 张图：一次换流的放大。t = 4 μs 发关断命令；td < toff 时上下管直通 -----
+function m3(){const td=+$('td').value,toff=+$('toff').value,{fc}=P();$('tdv').textContent=td.toFixed(1);$('toffv').textContent=toff.toFixed(1);
+ const o=prep($('c3')),a=axes(o,0,16,0,4.6,'时间 μs（t=4 μs 时控制器发出"上管关"命令）',[]),g=a.g,t0=4;
+ const sh=td<toff;if(sh){g.fillStyle='#ff000033';g.fillRect(a.X(t0+td),a.Y(4.6),a.X(t0+toff)-a.X(t0+td),a.Y(0)-a.Y(4.6));}
+ g.fillStyle='#e3f2ff';g.fillRect(a.X(t0),a.Y(4.6),a.X(t0+td)-a.X(t0),12);
+ const rows=[[3.6,'上管门极',t=>t<t0?1:0,'#1f6feb'],[2.5,'上管实际',t=>t<t0?1:t<t0+toff?1-(t-t0)/toff:0,'#1f6feb'],[1.4,'下管门极',t=>t>=t0+td?1:0,'#9c36b5'],[0.3,'下管实际',t=>t>=t0+td?1:0,'#9c36b5']];
+ rows.forEach(([y,n,fn,col])=>{const p=[];for(let k=0;k<=1600;k++){const t=k/100;p.push([a.X(t),a.Y(y+0.8*fn(t))]);}line(g,p,col,2);g.fillStyle='#444';g.fillText(n,2,a.Y(y+0.4));});
+ g.strokeStyle='#999';g.setLineDash([3,3]);[t0,t0+td,t0+toff].forEach(t=>{g.beginPath();g.moveTo(a.X(t),a.Y(4.6));g.lineTo(a.X(t),a.Y(0));g.stroke();});g.setLineDash([]);
+ g.fillStyle='#456';g.fillText('死区 td',a.X(t0)+3,a.Y(4.6)+10);
+ const w=$('st');if(sh){w.style.display='block';w.innerHTML='🔴 危险：死区 '+td.toFixed(1)+' μs &lt; 关断时间 '+toff.toFixed(1)+' μs，上下管将同时导通约 <b>'+(toff-td).toFixed(1)+' μs</b>（红色区域）。500 V 母线经两管直接短路，会产生巨大的电流尖峰，可能导致 IGBT 损坏！';}else w.style.display='none';
+ const dv=VDC*td*1e-6*fc;$('r3').innerHTML='死区电压损失 ΔV ≈ Vdc·td·fc = 500 V × '+td.toFixed(1)+' μs × '+(fc/1000).toFixed(1)+' kHz ≈ <b>'+dv.toFixed(1)+' V</b>（电流流出桥臂(i&gt;0)时输出平均电压降低 '+dv.toFixed(1)+' V，流入(i&lt;0)时升高）。载波越高，死区损失越大。';}
+
+// ----- 第 4 张图：FFT 频谱（c4）和 RL 电流（c5）。R = 10 Ω，L = 20 mH -----
+function m4(){const{f,fc,m}=P(),N=1<<15,T=1/f,re=new Float64Array(N),im=new Float64Array(N);
+ // 一个基波周期上的桥臂电压：正弦大于三角为 +250 V，否则 −250 V，然后做 FFT
+ for(let k=0;k<N;k++){const t=T*k/N;re[k]=m*Math.sin(2*Math.PI*f*t)>tri(t,fc)?250:-250;}fft(re,im);
+ const fmax=Math.min(3.5*fc,(N/2-1)*f),K=Math.floor(fmax/f),mag=[];let mx=0;for(let n=1;n<=K;n++){const A=2*Math.hypot(re[n],im[n])/N;mag.push(A);}
+ const a=axes(prep($('c4')),0,fmax/1000,0,320,'频率 kHz',[0,100,200,300]),g=a.g,bw=Math.max(1.5,(a.X(f/1000)-a.X(0))*0.7);let low=0;
+ // 绿色 = 基波，红色 = 低于 fc/2 的低次谐波，橙色 = 载波附近的边带
+ mag.forEach((A,i)=>{const n=i+1,fr=n*f;let col='#e8912d';if(n==1)col='#2b8a3e';else if(fr<fc*0.5){col='#d6336c';low+=A*A;}g.fillStyle=col;g.fillRect(a.X(fr/1000)-bw/2,a.Y(A),bw,a.Y(0)-a.Y(A));});
+ g.fillStyle='#888';for(let j=1;j*fc<=fmax;j++){g.fillText(j+'×fc',a.X(j*fc/1000)-10,16);}
+ const h=n=>mag[n-1]||0;$('r4').innerHTML='基波 '+f+' Hz 幅值 <b>'+h(1).toFixed(0)+' V</b>（理想 m×250 = '+(Math.min(m,1)*250).toFixed(0)+' V'+(m>1?'，过调制时不再线性增长':'')+'）；3/5/7 次：'+[3,5,7].map(n=>h(n).toFixed(1)).join(' / ')+' V；低次谐波(&lt;fc/2) 有效值 ≈ <b>'+Math.sqrt(low/2).toFixed(1)+' V</b>';
+ // RL 电流：先空转两个周期，去掉上电暂态，再记录接下来两个周期
+ const R=10,L=0.02,T2=2/f,M=Math.max(20000,Math.ceil(T2*fc*100)),dt=T2/M,w=2*Math.PI*f;let i=0,pts=[];
+ for(let k=0;k<M;k++){const t=k*dt;i+=dt*((m*Math.sin(w*t)>tri(t,fc)?250:-250)-R*i)/L;}// warm-up 2 cycles
+ const Z=Math.hypot(R,w*L),ph=Math.atan2(w*L,R),A1=h(1)/Z,ip=[],id=[],st=Math.ceil(M/3000);let ym=0;
+ for(let k=0;k<=M;k++){const t=k*dt;if(k%st==0){ip.push([t,i]);id.push([t,A1*Math.sin(w*t-ph)]);ym=Math.max(ym,Math.abs(i));}i+=dt*((m*Math.sin(w*t)>tri(t,fc)?250:-250)-R*i)/L;}
+ ym=Math.ceil(ym*1.15)||1;const b=axes(prep($('c5')),0,T2,-ym,ym,'时间 0~'+(T2*1000).toFixed(0)+' ms，电流 A',[-ym,0,ym]);
+ line(b.g,ip.map(q=>[b.X(q[0]),b.Y(q[1])]),'#d6336c',1.3);line(b.g,id.map(q=>[b.X(q[0]),b.Y(q[1])]),'#2b8a3e',2,[6,4]);}
+
+// 地址栏可以带参数，例如 ?ton=40&f=30&m=1.2&solo=4。solo=1..4 只显示其中一张卡片。
+const Q=new URLSearchParams(location.search);['ton','f','fc','m','td','toff'].forEach(k=>{if(Q.has(k))$(k).value=Q.get(k);});
+if(Q.has('solo')){document.querySelector('header').style.display='none';document.querySelectorAll('section.card').forEach((e,i)=>{if(i+1!=+Q.get('solo'))e.style.display='none';});}
+
+// 四张图各画一次。窗口变大变小时也全部重画，否则画布会糊或者留白。
+function all(){m1();m2();m3();m4();}
+
+// 滑块接线：ton 只影响第 1 张图；f/fc/m 影响第 2、3、4 张；td/toff 只影响死区那张。
+$('ton').oninput=m1;['f','fc','m'].forEach(k=>$(k).oninput=()=>{m2();m3();m4();});['td','toff'].forEach(k=>$(k).oninput=m3);
+window.addEventListener('resize',all);all();
+</script></body></html>
